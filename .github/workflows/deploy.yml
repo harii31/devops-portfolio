@@ -1,4 +1,4 @@
-name: Build and Push to ECR
+name: Build, Push and Deploy
 
 on:
   push:
@@ -35,3 +35,29 @@ jobs:
         run: |
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+      - name: Deploy to EC2
+        env:
+          IMAGE_URI: ${{ steps.login-ecr.outputs.registry }}/devops-portfolio:${{ github.sha }}
+        run: |
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "i-009343064307f284a" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Deploy DevOps portfolio" \
+            --parameters "commands=[
+              \"aws ecr get-login-password --region ap-south-1 | sudo docker login --username AWS --password-stdin 670682107839.dkr.ecr.ap-south-1.amazonaws.com\",
+              \"sudo docker pull $IMAGE_URI\",
+              \"sudo docker stop devops-portfolio || true\",
+              \"sudo docker rm devops-portfolio || true\",
+              \"sudo docker run -d --name devops-portfolio -p 8080:80 $IMAGE_URI\"
+            ]" \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "SSM Command ID: $COMMAND_ID"
+
+          aws ssm wait command-executed \
+            --command-id "$COMMAND_ID" \
+            --instance-id "i-009343064307f284a"
+
+          echo "Deployment completed successfully!"
